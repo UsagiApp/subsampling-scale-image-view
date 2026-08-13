@@ -371,9 +371,6 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 		Dispatchers.Main.immediate + InternalErrorHandler() + SupervisorJob(),
 	)
 
-	@Volatile
-	private var imageGeneration = 0L
-
 	init {
 		setMinimumDpi(160)
 		setDoubleTapZoomDpi(160)
@@ -407,7 +404,6 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 	@JvmOverloads
 	public fun setImage(imageSource: ImageSource, previewSource: ImageSource? = null, state: ImageViewState? = null) {
 		reset(true)
-		val generation = imageGeneration
 		state?.let { restoreState(it) }
 		pendingState?.let { restoreState(it) }
 
@@ -432,7 +428,7 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 						ContentResolver.SCHEME_ANDROID_RESOURCE + "://" + context.packageName + "/" +
 							(previewSource as ImageSource.Resource).resourceId,
 					)
-					loadBitmap(uri, true, generation)
+					loadBitmap(uri, true)
 				}
 			}
 		}
@@ -462,10 +458,10 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 				uri = imageSource.toUri(context).also { uri ->
 					if (imageSource.isTilingEnabled || sRegion != null) {
 						// Load the bitmap using tile decoding.
-						initTiles(regionDecoderFactory, uri, generation)
+						initTiles(regionDecoderFactory, uri)
 					} else {
 						// Load the bitmap as a single image.
-						loadBitmap(uri, false, generation)
+						loadBitmap(uri, false)
 					}
 				}
 			}
@@ -1135,7 +1131,6 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 	}
 
 	private fun reset(isNewImage: Boolean) {
-		if (isNewImage) imageGeneration++
 		scale = 0f
 		scaleStart = 0f
 		vTranslate = null
@@ -1376,7 +1371,7 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 		invalidate()
 	}
 
-	private fun loadBitmap(source: Uri, preview: Boolean, generation: Long = imageGeneration) {
+	private fun loadBitmap(source: Uri, preview: Boolean) {
 		coroutineScope.launch {
 			try {
 				val bitmap = async {
@@ -1389,26 +1384,15 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 						getExifOrientation(context, source)
 					}
 				}
-				val decoded = bitmap.await()
 				if (preview) {
-					if (generation != imageGeneration) {
-						decoded.recycle()
-						return@launch
-					}
-					onPreviewLoaded(decoded)
+					onPreviewLoaded(bitmap.await())
 				} else {
-					val decodedOrientation = orientation.await()
-					if (generation != imageGeneration) {
-						decoded.recycle()
-						return@launch
-					}
-					onImageLoaded(decoded, decodedOrientation, false)
+					onImageLoaded(bitmap.await(), orientation.await(), false)
 				}
 			} catch (e: CancellationException) {
 				throw e
 			} catch (error: Throwable) {
 				Log.e(TAG, "Failed to load bitmap", error)
-				if (generation != imageGeneration) return@launch
 				if (preview) {
 					onImageEventListeners.onPreviewLoadError(error)
 				} else {
@@ -1418,9 +1402,8 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 		}
 	}
 
-	private fun initTiles(decoderFactory: DecoderFactory<out ImageRegionDecoder>, source: Uri, generation: Long) {
+	private fun initTiles(decoderFactory: DecoderFactory<out ImageRegionDecoder>, source: Uri) {
 		coroutineScope.launch {
-			var newDecoder: ImageRegionDecoder? = null
 			try {
 				val exifOrientation = async {
 					runInterruptible(backgroundDispatcher) {
@@ -1428,8 +1411,8 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 					}
 				}
 				val (w, h) = runInterruptible(backgroundDispatcher) {
-					newDecoder = decoderFactory.make()
-					val dimensions = checkNotNull(newDecoder).init(context, source)
+					decoder = decoderFactory.make()
+					val dimensions = checkNotNull(decoder).init(context, source)
 					var sWidth = dimensions.x
 					var sHeight = dimensions.y
 					sRegion?.also {
@@ -1442,24 +1425,16 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 					}
 					sWidth to sHeight
 				}
-				val readyDecoder = checkNotNull(newDecoder)
-				if (generation != imageGeneration) {
-					readyDecoder.recycle()
-					return@launch
-				}
-				onTilesInited(readyDecoder, w, h, exifOrientation.await(), generation)
+				onTilesInited(checkNotNull(decoder), w, h, exifOrientation.await())
 			} catch (e: CancellationException) {
-				newDecoder?.recycle()
 				throw e
 			} catch (error: Throwable) {
-				newDecoder?.recycle()
-				if (generation == imageGeneration) onImageEventListeners.onImageLoadError(error)
+				onImageEventListeners.onImageLoadError(error)
 			}
 		}
 	}
 
-	private fun loadTile(decoder: ImageRegionDecoder, tile: Tile, generation: Long = imageGeneration) {
-		if (generation != imageGeneration) return
+	private fun loadTile(decoder: ImageRegionDecoder, tile: Tile) {
 		tile.isLoading = true
 		coroutineScope.launch {
 			try {
@@ -1486,17 +1461,13 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 					tile.isLoading = false
 					null
 				}
-				if (generation != imageGeneration) {
-					bitmap?.recycle()
-					return@launch
-				}
 				tile.bitmap = bitmap
 				tile.isLoading = false
 				onTileLoaded()
 			} catch (e: CancellationException) {
 				throw e
 			} catch (error: Throwable) {
-				if (generation == imageGeneration) onImageEventListeners.onTileLoadError(error)
+				onImageEventListeners.onTileLoadError(error)
 			}
 		}
 	}
@@ -1505,11 +1476,7 @@ public open class SubsamplingScaleImageView @JvmOverloads constructor(
 	 * Called by worker task when decoder is ready and image size and EXIF orientation is known.
 	 */
 	@Synchronized
-	private fun onTilesInited(decoder: ImageRegionDecoder, sWidth: Int, sHeight: Int, sOrientation: Int, generation: Long) {
-		if (generation != imageGeneration) {
-			decoder.recycle()
-			return
-		}
+	private fun onTilesInited(decoder: ImageRegionDecoder, sWidth: Int, sHeight: Int, sOrientation: Int) {
 		// If actual dimensions don't match the declared size, reset everything.
 		if ((sWidth > 0) && (this.sHeight > 0) && (this.sWidth != sWidth || this.sHeight != sHeight)) {
 			reset(false)
