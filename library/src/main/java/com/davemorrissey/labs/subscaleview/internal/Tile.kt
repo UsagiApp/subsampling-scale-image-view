@@ -19,6 +19,10 @@ internal class Tile {
 	@JvmField
 	var isVisible = false
 
+	/** Changes whenever this tile is recycled or a new decode is submitted. */
+	@JvmField
+	var loadGeneration = 0L
+
 	@JvmField
 	var isValid = false
 
@@ -33,7 +37,9 @@ internal class Tile {
 	val fileSRect = Rect()
 
 	fun recycle() {
+		loadGeneration++
 		isVisible = false
+		isLoading = false
 		bitmap = null
 	}
 }
