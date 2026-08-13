@@ -1,4 +1,4 @@
-Subsampling Scale Image View (Kotatsu fork)
+Subsampling Scale Image View (Kotatsu / Usagi fork)
 ===========================
 
 > A custom image view for Android, designed for photo galleries and displaying huge images (e.g. maps and building
@@ -34,8 +34,8 @@ Subsampling Scale Image View (Kotatsu fork)
 
     ```groovy
     dependencies {
-        implementation("com.github.KotatsuApp:subsampling-scale-image-view:$version")
+        implementation("com.github.UsagiApp:subsampling-scale-image-view:$version")
     }
     ```
 
-   See for versions at [JitPack](https://jitpack.io/#KotatsuApp/subsampling-scale-image-view)
+   See for versions at [JitPack](https://jitpack.io/#UsagiApp/subsampling-scale-image-view)
